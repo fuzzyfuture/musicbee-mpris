@@ -1,5 +1,5 @@
 Name: musicbee-mpris
-Version: 1.1.0
+Version: 1.1.1
 Release: 1
 Summary: An MPRIS server for MusicBee running in Wine
 Source0: musicbee-mpris-%{version}.tar.gz
