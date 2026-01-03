@@ -5,6 +5,7 @@ import time
 import argparse
 import signal
 import requests
+import sys
 from mpris_server.adapters import MprisAdapter
 from mpris_server.server import Server
 from mpris_server import EventAdapter, Metadata, MetadataEntries, Paths, PlayState, Position, Rate, Track
@@ -17,21 +18,17 @@ class MetadataFileHandler(FileSystemEventHandler):
     self.adapter = adapter
     self.file_type = file_type
     self.last_tags_update = 0
-    self.last_art_update = 0
 
   def on_modified(self, event):
     if (self.file_type == 'tags'):
       now = time.time()
 
-      if now - self.last_tags_update > 0.5:
-        self.adapter.load_tags()
-        self.last_tags_update = now
-    elif (self.file_type == 'art'):
-      now = time.time()
+      print('tags update detected...')
 
-      if now - self.last_art_update > 0.5:
+      if now - self.last_tags_update > 2:
+        self.adapter.load_tags()
         self.adapter.load_art()
-        self.last_art_update = now
+        self.last_tags_update = now
 
 class MusicbeeAdapter(MprisAdapter):
   def __init__(self, tags_path, art_path, lastfm_api_key, play_pause_key, next_key, prev_key):
@@ -58,9 +55,6 @@ class MusicbeeAdapter(MprisAdapter):
 
     tags_handler = MetadataFileHandler(self, 'tags')
     self.observer.schedule(tags_handler, path=self.tags_path, recursive=False)
-
-    art_handler = MetadataFileHandler(self, 'art')
-    self.observer.schedule(art_handler, path=self.art_path, recursive=False)
 
     self.observer.start()
 
@@ -98,9 +92,9 @@ class MusicbeeAdapter(MprisAdapter):
       print('last.fm api key passed; fetching art from last.fm')
       self.fetch_art_lastfm()
 
-      if (self.art_url):
-        print('last.fm fetch failed; falling back to local cover art')
-        return
+      if (self.art_url): return
+
+      print('last.fm fetch failed; falling back to local cover art')
 
     art_path_obj = Path(self.art_path)
 
@@ -116,7 +110,7 @@ class MusicbeeAdapter(MprisAdapter):
         self.event_handler.on_title()
 
   def fetch_art_lastfm(self):
-    if not self.lastfm_api_key or (self.album == 'Unknown' and self.artists == ['Unknown']):
+    if not self.lastfm_api_key or self.album == 'Unknown' or self.album_artists[0] == 'Unknown' or not self.album_artists[0]:
       self.art_url = ''
       return
     
