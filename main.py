@@ -6,6 +6,7 @@ import argparse
 import signal
 import requests
 import sys
+import threading
 from mpris_server.adapters import MprisAdapter
 from mpris_server.server import Server
 from mpris_server import EventAdapter, Metadata, MetadataEntries, Paths, PlayState, Position, Rate, Track
@@ -14,26 +15,32 @@ from watchdog.events import FileSystemEventHandler
 from pathlib import Path
 
 class MetadataFileHandler(FileSystemEventHandler):
-  def __init__(self, adapter, file_type):
+  def __init__(self, adapter):
     self.adapter = adapter
-    self.file_type = file_type
     self.last_tags_update = 0
+    self.last_art_update = 0
 
   def on_modified(self, event):
-    if (self.file_type == 'tags'):
-      now = time.time()
+    if event.is_directory:
+      return
 
-      print('tags update detected...')
+    now = time.time()
+    filename = Path(event.src_path).name
 
-      if now - self.last_tags_update > 2:
-        self.adapter.load_tags()
-        self.adapter.load_art()
-        self.last_tags_update = now
+    if filename == 'Tags.txt' and (now - self.last_tags_update) > 0.5:
+      print('tags file modified')
+      self.adapter.load_tags()
+      self.last_tags_update = now
+    elif filename == 'CoverArtwork.jpg' and (now - self.last_art_update) > 0.5:
+      print('art file modified')
+      self.adapter.load_art()
+      self.last_art_update = now
 
 class MusicbeeAdapter(MprisAdapter):
-  def __init__(self, tags_path, art_path, lastfm_api_key, play_pause_key, next_key, prev_key):
-    self.tags_path = tags_path
-    self.art_path = art_path
+  def __init__(self, metadata_dir, lastfm_api_key, play_pause_key, next_key, prev_key):
+    self.metadata_dir = metadata_dir
+    self.tags_path = str(Path(metadata_dir) / 'Tags.txt')
+    self.art_path = str(Path(metadata_dir) / 'CoverArtwork.jpg')
     self.lastfm_api_key = lastfm_api_key
 
     self.play_pause_key = play_pause_key
@@ -47,16 +54,28 @@ class MusicbeeAdapter(MprisAdapter):
     self.art_url = ''
     self.play_state = PlayState.PAUSED
     self.event_handler = None
+    self.observer = None
 
     self.load_tags()
     self.load_art()
+    self.start_observer()
 
-    self.observer = Observer()
+  def start_observer(self):
+    try:
+      if self.observer is not None:
+        self.observer.stop()
+        self.observer.join(timeout=2)
+      
+      self.observer = Observer()
 
-    tags_handler = MetadataFileHandler(self, 'tags')
-    self.observer.schedule(tags_handler, path=self.tags_path, recursive=False)
+      file_handler = MetadataFileHandler(self)
+      self.observer.schedule(file_handler, path=self.metadata_dir, recursive=False)
 
-    self.observer.start()
+      self.observer.start()
+
+      print('started file observer')
+    except Exception as e:
+      print(f'error starting file observer: {e}')
 
   def register_event_handler(self, event_handler):
     self.event_handler = event_handler
@@ -64,26 +83,24 @@ class MusicbeeAdapter(MprisAdapter):
   def load_tags(self):
     time.sleep(0.2)
 
-    with open(self.tags_path, 'rt', encoding='utf-8-sig') as file:
-      tags = file.read()
-      tags_split = tags.split('\t')
+    try:
+      with open(self.tags_path, 'rt', encoding='utf-8-sig') as file:
+        tags = file.read()
+        tags_split = tags.split('\t')
 
-      if len(tags_split) < 4:
-        self.play_state = PlayState.PAUSED
-
-        if self.event_handler is not None:
-          self.event_handler.on_playpause()
-
-        return
-
-      self.artists, self.album, self.title, self.album_artists = tags_split[:4]
-      self.artists = self.artists.split(';')
-      self.album_artists = self.album_artists.split(';')
-      self.play_state = PlayState.PLAYING
-
+        if len(tags_split) >= 3:
+          self.artists, self.album, self.title, self.album_artists = tags_split[:4]
+          self.artists = self.artists.split(';')
+          self.album_artists = self.album_artists.split(';')
+          self.play_state = PlayState.PLAYING
+        else:
+          self.play_state = PlayState.PAUSED
+    except Exception as e:
+      print(f'could not load tags: {e}')
+    
     if self.event_handler is not None:
-        self.event_handler.on_title()
-        self.event_handler.on_playpause()
+      self.event_handler.on_title()
+      self.event_handler.on_playpause()
 
   def load_art(self):
     time.sleep(0.2)
@@ -92,32 +109,44 @@ class MusicbeeAdapter(MprisAdapter):
       print('last.fm api key passed; fetching art from last.fm')
       self.fetch_art_lastfm()
 
-      if (self.art_url): return
+    if (not self.lastfm_api_key or not self.art_url):
+      if (not self.lastfm_api_key):
+        print('no last.fm key; loading local cover art')
+      else:
+        print('last.fm fetch failed; falling back to local cover art')
 
-      print('last.fm fetch failed; falling back to local cover art')
+      try:
+        art_path_obj = Path(self.art_path)
 
-    art_path_obj = Path(self.art_path)
-
-    try:
-      if art_path_obj.stat().st_size < 650: return
-    except:
-      print('could not load cover art :(')
-
-    timestamp = int(time.time() * 1000)
-    self.art_url = art_path_obj.as_uri() + f"?t={timestamp}"
-
+        if art_path_obj.stat().st_size >= 650:
+          timestamp = int(time.time() * 1000)
+          self.art_url = art_path_obj.as_uri() + f"?t={timestamp}"
+        else:
+          self.art_url = ''
+      except Exception as e:
+        print(f'could not load local cover art: {e}')
+    
     if self.event_handler is not None:
-        self.event_handler.on_title()
+      self.event_handler.on_title()
+      self.event_handler.on_playpause()
 
   def fetch_art_lastfm(self):
-    if not self.lastfm_api_key or self.album == 'Unknown' or self.album_artists[0] == 'Unknown' or not self.album_artists[0]:
+    if not self.lastfm_api_key or self.album == 'Unknown':
       self.art_url = ''
       return
     
     try:
+      artist = (self.album_artists[0] if self.album_artists and self.album_artists[0] else
+                self.artists[0] if self.artists and self.artists[0] else
+                None)
+      
+      if not artist:
+        self.art_url = ''
+        return
+
       params = {
         'method': 'album.getinfo',
-        'artist': self.album_artists[0],
+        'artist': artist,
         'album': self.album,
         'api_key': self.lastfm_api_key,
         'format': 'json'
@@ -204,8 +233,7 @@ class MusicbeeEventHandler(EventAdapter):
 def main():
   parser = argparse.ArgumentParser(description='A script that runs an MPRIS server for MusicBee running in Wine.')
 
-  parser.add_argument('tags_path', type=str, help='The file path of your metadata tags file.')
-  parser.add_argument('art_path', type=str, help='The file path of your cover art file.')
+  parser.add_argument('metadata_dir', type=str, help='The directory that holds both your tags file (Tags.txt) and cover art file (CoverArtwork.jpg)')
   parser.add_argument('--lastfm_api_key', type=str, help='Your Last.fm API key.')
   parser.add_argument('--play_pause_key', type=str, help='Your MusicBee hotkey for play/pause.')
   parser.add_argument('--next_key', type=str, help='Your MusicBee hotkey for next track.')
@@ -213,7 +241,7 @@ def main():
 
   args = parser.parse_args()
 
-  musicbee_adapter = MusicbeeAdapter(args.tags_path, args.art_path, args.lastfm_api_key, args.play_pause_key, args.next_key, args.prev_key)
+  musicbee_adapter = MusicbeeAdapter(args.metadata_dir, args.lastfm_api_key, args.play_pause_key, args.next_key, args.prev_key)
 
   mpris = Server('MusicBee', adapter=musicbee_adapter)
   event_handler = MusicbeeEventHandler(root=mpris.root, player=mpris.player)
