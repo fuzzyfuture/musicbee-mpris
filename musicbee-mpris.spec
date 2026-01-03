@@ -1,15 +1,21 @@
 Name: musicbee-mpris
-Version: 1
-Release: 5
+Version: 1.1.0
+Release: 1
 Summary: An MPRIS server for MusicBee running in Wine
+Source0: musicbee-mpris-%{version}.tar.gz
 License: MIT
 Requires: systemd, xdotool
+
+%global debug_package %{nil}
 
 %description
 An MPRIS server for MusicBee running in Wine
 
+%prep
+%setup -q
+
 %build
-pyinstaller --onefile %{_sourcedir}/main.py
+pyinstaller --onefile --distpath ./dist main.py
 
 %install
 mkdir -p %{buildroot}%{_bindir}
