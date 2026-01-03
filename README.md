@@ -1,6 +1,6 @@
 # MusicBee MPRIS Server
 
-A janky MPRIS server for MusicBee running in Wine on Linux. This script allows you to view metadata and control playback from universal media player controllers like [playerctl](https://github.com/altdesktop/playerctl), or desktop widgets such as [PlasMusic Toolbar](https://github.com/ccatterina/plasmusic-toolbar). It mostly works.
+A janky MPRIS server for MusicBee running in Wine on Linux. This script allows you to view metadata and control playback from universal media player controllers like [playerctl](https://github.com/altdesktop/playerctl), or desktop widgets such as [PlasMusic Toolbar](https://github.com/ccatterina/plasmusic-toolbar). It also allows you to pass metadata to applications such as [Music Presence](https://github.com/ungive/discord-music-presence), which otherwise does not support MusicBee on Linux. It mostly works.
 
 This script works by relying on the [Now Playing to External Files](https://www.getmusicbee.com/addons/plugins/47/now-playing-to-external-files/) plugin to write the metadata to text & image files. The files are then monitored for changes, and on change, the new metadata is exposed via the MPRIS D-Bus interface. The playback controls work by sending pre-configured hotkeys to the MusicBee application.
 
@@ -22,6 +22,12 @@ The tags section of the plugin config should be as shown above. If you would lik
 
 The `Tags file` and `Album artwork` fields can be set to whatever you'd like, just make sure they're in a linux directory (`Z:/`). You will pass these in as parameters to the script later. 
 
+### Configuring Last.fm API
+
+You can optionally pass a Last.fm API key when starting the script. Doing so will cause cover art to be pulled from the Last.fm API, only using the local image file as a fallback.
+
+This is useful for displaying cover art in applications such as [Music Presence](https://github.com/ungive/discord-music-presence), since the cover art will not be displayed if you're using a local file path. You can obtain a Last.fm API key [here](www.last.fm/api/account/create).
+
 ### Configuring hotkeys
 
 Hotkeys are optional - you can skip this part if you just want to view metadata and don't care about controlling playback.
@@ -35,13 +41,13 @@ The supported hotkeys are `Multimedia: Next`, `Multimedia: Play/Pause`, and `Mul
 If you've installed the RPM, you should just be able to run `musicbee-mpris`:
 
 ```bash
-musicbee-mpris [--play_pause_key PLAY_PAUSE_KEY] [--next_key NEXT_KEY] [--prev_key PREV_KEY] tags_path art_path
+musicbee-mpris [--lastfm_api_key LASTFM_API_KEY] [--play_pause_key PLAY_PAUSE_KEY] [--next_key NEXT_KEY] [--prev_key PREV_KEY] tags_path art_path
 ```
 
 Example with real inputs:
 
 ```bash
-musicbee-mpris --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/Tags.txt /home/nate/Music/MusicBee/CoverArtwork.jpg
+musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/Tags.txt /home/nate/Music/MusicBee/CoverArtwork.jpg
 ```
 
 Example bash script that opens the MPRIS server alongside MusicBee and stops the server when MusicBee is closed:
@@ -50,7 +56,7 @@ Example bash script that opens the MPRIS server alongside MusicBee and stops the
 #!/bin/bash
 
 if ! pgrep -x "musicbee-mpris" > /dev/null; then
-        musicbee-mpris --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/Tags.txt /home/nate/Music/MusicBee/CoverArtwork.jpg &
+        musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/Tags.txt /home/nate/Music/MusicBee/CoverArtwork.jpg &
         MPRIS_PID=$!
 fi
 
