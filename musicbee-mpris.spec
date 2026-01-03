@@ -1,6 +1,6 @@
 Name: musicbee-mpris
 Version: 1
-Release: 4
+Release: 5
 Summary: An MPRIS server for MusicBee running in Wine
 License: MIT
 Requires: systemd, xdotool
