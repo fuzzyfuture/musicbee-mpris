@@ -20,7 +20,7 @@ This guide assumes that you have already gotten MusicBee running in Wine with th
 
 The tags section of the plugin config should be as shown above. If you would like to see other tags, you will need to edit and run the script on your own.
 
-The `Tags file` and `Album artwork` fields can be set to whatever you'd like, just make sure they're in a linux directory (`Z:/`). You will pass these in as parameters to the script later. 
+The tags file and album artwork filenames should be `Tags.txt` and `CoverArtwork.jpg` respectively. Make sure they're in the same linux directory (`Z:/`) as eachother. **This is very important! The script will not work if you use other file names or put the files in separate directories.** You will pass the directory in as a parameter to the script later. 
 
 ### Configuring Last.fm API
 
@@ -41,33 +41,35 @@ The supported hotkeys are `Multimedia: Next`, `Multimedia: Play/Pause`, and `Mul
 If you've installed the RPM, you should just be able to run `musicbee-mpris`:
 
 ```bash
-musicbee-mpris [--lastfm_api_key LASTFM_API_KEY] [--play_pause_key PLAY_PAUSE_KEY] [--next_key NEXT_KEY] [--prev_key PREV_KEY] tags_path art_path
+musicbee-mpris [--lastfm_api_key LASTFM_API_KEY] [--play_pause_key PLAY_PAUSE_KEY] [--next_key NEXT_KEY] [--prev_key PREV_KEY] metadata_dir
 ```
 
 Example with real inputs:
 
 ```bash
-musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/Tags.txt /home/nate/Music/MusicBee/CoverArtwork.jpg
+musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/metadata/
 ```
 
 Example bash script that opens the MPRIS server alongside MusicBee and stops the server when MusicBee is closed:
 
 ```bash
 #!/bin/bash
-
 if ! pgrep -x "musicbee-mpris" > /dev/null; then
-        musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/Tags.txt /home/nate/Music/MusicBee/CoverArtwork.jpg &
-        MPRIS_PID=$!
+	musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/metadata/ &
+	MPRIS_PID=$!
 fi
 
-trap "kill $MPRIS_PID 2>/dev/null" EXIT
+trap "pkill -9 musicbee-mpris 2>/dev/null" EXIT
 
 wine "$HOME/.wine/drive_c/Program Files (x86)/MusicBee/MusicBee.exe"
 ```
 
 ## Acknowledgements
 
-Special thanks to [alexdelorenzo](https://github.com/alexdelorenzo) for the [mpris_server](https://github.com/alexdelorenzo/mpris_server) Python library, I would not have been able to figure this out otherwise :-)
+- [alexdelorenzo](https://github.com/alexdelorenzo) for the [mpris_server](https://github.com/alexdelorenzo/mpris_server) Python library
+- boroda for the [Now Playing to External Files](https://www.getmusicbee.com/addons/plugins/47/now-playing-to-external-files/) MusicBee plugin
+
+Thank you! This project would not be possible without your work :-)
 
 ## License
 
