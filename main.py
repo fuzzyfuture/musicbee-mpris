@@ -7,12 +7,18 @@ import signal
 import requests
 import sys
 import threading
+import json
 from mpris_server.adapters import MprisAdapter
 from mpris_server.server import Server
-from mpris_server import EventAdapter, Metadata, MetadataEntries, Paths, PlayState, Position, Rate, Track
+from mpris_server import EventAdapter, LoopStatus, Metadata, MetadataEntries, Paths, PlayState, Position, Rate, Track, Volume
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from pathlib import Path
+
+# Order MusicBee's single "repeat" hotkey cycles through when it's a toggle
+# rather than three distinct hotkeys. Off -> repeat all -> repeat one is the
+# default MusicBee UI cycle; reorder this if yours differs.
+REPEAT_CYCLE = [LoopStatus.NONE, LoopStatus.PLAYLIST, LoopStatus.TRACK]
 
 class MetadataFileHandler(FileSystemEventHandler):
   def __init__(self, adapter):
@@ -37,7 +43,9 @@ class MetadataFileHandler(FileSystemEventHandler):
       self.last_art_update = now
 
 class MusicbeeAdapter(MprisAdapter):
-  def __init__(self, metadata_dir, lastfm_api_key, play_pause_key, next_key, prev_key):
+  def __init__(self, metadata_dir, lastfm_api_key, play_pause_key, next_key, prev_key,
+               stop_key=None, shuffle_key=None, repeat_key=None,
+               pactl_app_name='MusicBee', desktop_entry=''):
     self.metadata_dir = metadata_dir
     self.tags_path = str(Path(metadata_dir) / 'Tags.txt')
     self.art_path = str(Path(metadata_dir) / 'CoverArtwork.jpg')
@@ -46,6 +54,11 @@ class MusicbeeAdapter(MprisAdapter):
     self.play_pause_key = play_pause_key
     self.next_key = next_key
     self.prev_key = prev_key
+    self.stop_key = stop_key
+    self.shuffle_key = shuffle_key
+    self.repeat_key = repeat_key
+    self.pactl_app_name = pactl_app_name
+    self.desktop_entry = desktop_entry
 
     self.artists = ['Unknown']
     self.album = 'Unknown'
@@ -55,6 +68,12 @@ class MusicbeeAdapter(MprisAdapter):
     self.play_state = PlayState.PAUSED
     self.event_handler = None
     self.observer = None
+
+    # MusicBee doesn't expose these back to us, so we track what we last told
+    # it and assume it stayed in sync. Changing shuffle/repeat from within
+    # MusicBee's own UI will desync this until the next command from here.
+    self._shuffle_state = False
+    self._loop_status = LoopStatus.NONE
 
     self.load_tags()
     self.load_art()
@@ -185,6 +204,92 @@ class MusicbeeAdapter(MprisAdapter):
   def previous(self):
     self.run_musicbee_hotkey(self.prev_key)
 
+  def stop(self):
+    self.run_musicbee_hotkey(self.stop_key)
+
+  def get_shuffle(self) -> bool:
+    return self._shuffle_state
+
+  def set_shuffle(self, value: bool):
+    if value != self._shuffle_state:
+      self.run_musicbee_hotkey(self.shuffle_key)
+      self._shuffle_state = value
+
+  def is_repeating(self) -> bool:
+    return self._loop_status != LoopStatus.NONE
+
+  def is_playlist(self) -> bool:
+    return self._loop_status == LoopStatus.PLAYLIST
+
+  def set_loop_status(self, value: LoopStatus):
+    if value not in REPEAT_CYCLE:
+      return
+
+    current_idx = REPEAT_CYCLE.index(self._loop_status)
+    target_idx = REPEAT_CYCLE.index(value)
+    presses = (target_idx - current_idx) % len(REPEAT_CYCLE)
+
+    for _ in range(presses):
+      self.run_musicbee_hotkey(self.repeat_key)
+
+    self._loop_status = value
+
+  def find_pactl_sink_input(self):
+    try:
+      result = subprocess.run(
+        ['pactl', '-f', 'json', 'list', 'sink-inputs'],
+        capture_output=True, text=True, timeout=2
+      )
+      sink_inputs = json.loads(result.stdout)
+
+      for sink_input in sink_inputs:
+        if sink_input.get('properties', {}).get('application.name') == self.pactl_app_name:
+          return sink_input
+    except Exception as e:
+      print(f'could not query pactl for sink input: {e}')
+
+    return None
+
+  def get_volume(self) -> Volume:
+    sink_input = self.find_pactl_sink_input()
+
+    if sink_input is None:
+      return Volume(1.0)
+
+    channels = sink_input.get('volume', {})
+
+    if not channels:
+      return Volume(1.0)
+
+    percents = [float(c['value_percent'].rstrip('%')) for c in channels.values()]
+
+    return Volume(sum(percents) / len(percents) / 100.0)
+
+  def set_volume(self, value: Volume):
+    sink_input = self.find_pactl_sink_input()
+
+    if sink_input is None:
+      return
+
+    percent = max(0, round(float(value) * 100))
+    subprocess.run(['pactl', 'set-sink-input-volume', str(sink_input['index']), f'{percent}%'])
+
+  def is_mute(self) -> bool:
+    sink_input = self.find_pactl_sink_input()
+
+    if sink_input is None:
+      return False
+
+    return bool(sink_input.get('mute', False))
+
+  def set_mute(self, value: bool):
+    sink_input = self.find_pactl_sink_input()
+
+    if sink_input is None:
+      return
+
+    subprocess.run(['pactl', 'set-sink-input-mute', str(sink_input['index']), '1' if value else '0'])
+
   def metadata(self) -> Metadata:
     metadata: Metadata = {
       MetadataEntries.ARTISTS: self.artists,
@@ -205,7 +310,7 @@ class MusicbeeAdapter(MprisAdapter):
   def can_fullscreen(self) -> bool: return False
   def can_quit(self) -> bool: return False
   def can_raise(self) -> bool: return False
-  def get_desktop_entry(self) -> Paths: return ''
+  def get_desktop_entry(self) -> Paths: return self.desktop_entry
   def get_fullscreen(self) -> bool: return False
   def get_mime_types(self) -> list[str]: return []
   def get_uri_schemes(self) -> list[str]: return []
@@ -238,10 +343,25 @@ def main():
   parser.add_argument('--play_pause_key', type=str, help='Your MusicBee hotkey for play/pause.')
   parser.add_argument('--next_key', type=str, help='Your MusicBee hotkey for next track.')
   parser.add_argument('--prev_key', type=str, help='Your MusicBee hotkey for previous track.')
+  parser.add_argument('--stop_key', type=str, help='Your MusicBee hotkey for stop.')
+  parser.add_argument('--shuffle_key', type=str, help='Your MusicBee hotkey that toggles shuffle.')
+  parser.add_argument('--repeat_key', type=str, help='Your MusicBee hotkey that cycles repeat mode.')
+  parser.add_argument('--pactl_app_name', type=str, default='MusicBee',
+    help='The application.name pactl/PipeWire reports for MusicBee\'s audio stream (check with '
+         '`pactl -f json list sink-inputs`). Used to control volume/mute. Defaults to "MusicBee".')
+  parser.add_argument('--desktop_entry', type=str, default='',
+    help='The id (basename without ".desktop") of a .desktop file whose StartupWMClass matches '
+         'MusicBee\'s window, e.g. "musicbee". Needed for Plasma\'s task manager to show media '
+         'controls on hover; not required otherwise.')
 
   args = parser.parse_args()
 
-  musicbee_adapter = MusicbeeAdapter(args.metadata_dir, args.lastfm_api_key, args.play_pause_key, args.next_key, args.prev_key)
+  musicbee_adapter = MusicbeeAdapter(
+    args.metadata_dir, args.lastfm_api_key,
+    args.play_pause_key, args.next_key, args.prev_key,
+    stop_key=args.stop_key, shuffle_key=args.shuffle_key, repeat_key=args.repeat_key,
+    pactl_app_name=args.pactl_app_name, desktop_entry=args.desktop_entry
+  )
 
   mpris = Server('MusicBee', adapter=musicbee_adapter)
   event_handler = MusicbeeEventHandler(root=mpris.root, player=mpris.player)

@@ -8,7 +8,8 @@ This script works by relying on the [Now Playing to External Files](https://www.
 
 - MusicBee running in Wine (setting this up will not be covered here; see [this](https://getmusicbee.com/forum/index.php?topic=42906.0) or [this](https://getmusicbee.com/forum/index.php?topic=30205.30))
 - MusicBee [Now Playing to External Files](https://www.getmusicbee.com/addons/plugins/47/now-playing-to-external-files/) plugin
-- [xdotool](https://github.com/jordansissel/xdotool) if you wish to enable play/pause/next/prev controls
+- [xdotool](https://github.com/jordansissel/xdotool) if you wish to enable play/pause/next/prev/stop/shuffle/repeat controls
+- `pactl` (ships with PulseAudio and PipeWire's `pipewire-pulse`) if you wish to enable volume/mute controls
 
 ## Setup
 
@@ -34,20 +35,34 @@ Hotkeys are optional - you can skip this part if you just want to view metadata 
 
 ![alt text](/docs/image-2.png)
 
-The supported hotkeys are `Multimedia: Next`, `Multimedia: Play/Pause`, and `Multimedia: Previous`. You can set these to whatever you'd like and it should work fine. They will be passed in as optional parameters to the script.
+The supported hotkeys are `Multimedia: Next`, `Multimedia: Play/Pause`, `Multimedia: Previous`, and (optionally) `Stop`, `Shuffle` (toggle), and `Repeat` (cycle). You can set these to whatever you'd like and it should work fine. They will be passed in as optional parameters to the script.
+
+Shuffle and repeat are tracked, not read back: MusicBee doesn't expose its actual shuffle/repeat state to the outside world, so the script just remembers what it last told MusicBee and assumes it stayed that way. If you toggle shuffle or repeat from within MusicBee's own UI, the MPRIS-reported state will desync until you set it again from an MPRIS controller. Repeat is also assumed to cycle in the order Off → repeat all → repeat one, matching MusicBee's default UI behavior for a single toggle hotkey — reorder the `REPEAT_CYCLE` constant near the top of `main.py` if yours differs.
+
+### Configuring volume/mute
+
+Volume and mute aren't controlled through MusicBee at all — they're read from and written to MusicBee's actual PipeWire/PulseAudio audio stream via `pactl`, which is accurate in both directions (no guessing or drift). This requires `pactl` (present on any PipeWire or PulseAudio system) and needs no extra MusicBee configuration.
+
+By default the script looks for a sink-input whose `application.name` is `MusicBee` (confirm with `pactl -f json list sink-inputs` while MusicBee is playing); pass `--pactl_app_name` if yours reports something different.
+
+### Configuring taskbar/task-manager media controls (KDE Plasma)
+
+Plasma's Task Manager can show media control buttons when hovering a running app's taskbar entry (the same behavior you get with native players like Elisa), but only if it can match the MPRIS player to that window. It does this via the MPRIS `DesktopEntry` property, which must match the id of an installed `.desktop` file whose `StartupWMClass` matches MusicBee's window class (`musicbee.exe`).
+
+If you have such a `.desktop` file installed (see the example launcher script below, or make your own), pass its id (basename without the `.desktop` extension) via `--desktop_entry`, e.g. `--desktop_entry musicbee`. This is optional and only affects the Plasma task manager integration — every other feature works without it.
 
 ### Running the script
 
 If you've installed the RPM, you should just be able to run `musicbee-mpris`:
 
 ```bash
-musicbee-mpris [--lastfm_api_key LASTFM_API_KEY] [--play_pause_key PLAY_PAUSE_KEY] [--next_key NEXT_KEY] [--prev_key PREV_KEY] metadata_dir
+musicbee-mpris [--lastfm_api_key LASTFM_API_KEY] [--play_pause_key PLAY_PAUSE_KEY] [--next_key NEXT_KEY] [--prev_key PREV_KEY] [--stop_key STOP_KEY] [--shuffle_key SHUFFLE_KEY] [--repeat_key REPEAT_KEY] [--pactl_app_name PACTL_APP_NAME] [--desktop_entry DESKTOP_ENTRY] metadata_dir
 ```
 
 Example with real inputs:
 
 ```bash
-musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/metadata/
+musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b --stop_key ctrl+alt+End --shuffle_key ctrl+alt+s --repeat_key ctrl+alt+r /home/nate/Music/MusicBee/metadata/
 ```
 
 Example bash script that opens the MPRIS server alongside MusicBee and stops the server when MusicBee is closed:
@@ -55,7 +70,7 @@ Example bash script that opens the MPRIS server alongside MusicBee and stops the
 ```bash
 #!/bin/bash
 if ! pgrep -x "musicbee-mpris" > /dev/null; then
-	musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b /home/nate/Music/MusicBee/metadata/ &
+	musicbee-mpris --lastfm_api_key {key} --play_pause_key ctrl+alt+p --next_key ctrl+alt+n --prev_key ctrl+alt+b --stop_key ctrl+alt+End --shuffle_key ctrl+alt+s --repeat_key ctrl+alt+r /home/nate/Music/MusicBee/metadata/ &
 	MPRIS_PID=$!
 fi
 
