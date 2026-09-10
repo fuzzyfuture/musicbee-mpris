@@ -8,6 +8,7 @@ import requests
 import sys
 import threading
 import json
+import re
 from mpris_server.adapters import MprisAdapter
 from mpris_server.server import Server
 from mpris_server import EventAdapter, LoopStatus, Metadata, MetadataEntries, Paths, PlayState, Position, Rate, Track, Volume
@@ -186,8 +187,10 @@ class MusicbeeAdapter(MprisAdapter):
 
   def run_musicbee_hotkey(self, hotkey):
     if hotkey is None: return
-    search = 'MusicBee' if self.title == 'Unknown' else self.title
-    subprocess.run(['xdotool', 'search', '--name', search, 'key', hotkey])
+    search = 'MusicBee' if self.title == 'Unknown' else re.escape(self.title)
+    result = subprocess.run(['xdotool', 'search', '--name', search, 'key', hotkey], capture_output=True, text=True)
+    if result.returncode != 0:
+      print(f'xdotool could not find MusicBee window (search: {search!r}): {result.stderr.strip()}')
 
   def play(self):
     self.run_musicbee_hotkey(self.play_pause_key)
