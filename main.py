@@ -168,8 +168,6 @@ class MusicbeeAdapter(MprisAdapter):
 
   def run_musicbee_hotkey(self, hotkey):
     if hotkey is None: return
-    # xdotool --name takes a regex, but track titles are arbitrary text (e.g.
-    # "(Radio Edit)") that can contain regex metacharacters, so it must be escaped.
     search = 'MusicBee' if self.title == 'Unknown' else re.escape(self.title)
     result = subprocess.run(['xdotool', 'search', '--name', search, 'key', hotkey], capture_output=True, text=True)
     if result.returncode != 0:
